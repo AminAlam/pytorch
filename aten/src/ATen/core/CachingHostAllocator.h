@@ -1,13 +1,11 @@
 #include <c10/core/Allocator.h>
 #include <c10/core/thread_pool.h>
-#include <c10/util/CallOnce.h>
 #include <c10/util/flat_hash_map.h>
 #include <c10/util/llvmMathExtras.h>
 #include <optional>
 
 #include <deque>
 #include <mutex>
-#include <set>
 
 C10_DIAGNOSTIC_PUSH_AND_IGNORED_IF_DEFINED("-Wunused-parameter")
 namespace at {
@@ -40,6 +38,7 @@ struct alignas(64) FreeBlockList {
 
 namespace {
   // Max cached block sizes: (1 << MAX_SIZE_INDEX) bytes
+  // NOLINTNEXTLINE(misc-definitions-in-headers)
   constexpr size_t MAX_SIZE_INDEX = 64;
 }
 
@@ -111,17 +110,6 @@ template <
     typename E,
     typename B = HostBlock<S>>
 struct CachingHostAllocatorImpl {
-  CachingHostAllocatorImpl() {
-    // Launch the background thread and process events in a loop.
-    if (pinned_use_background_threads()) {
-      getBackgroundThreadPool()->run([&]() {
-        while (true) {
-          process_events();
-          std::this_thread::sleep_for(std::chrono::microseconds(100));
-        }
-      });
-    }
-  }
   virtual ~CachingHostAllocatorImpl() = default;
 
  public:
@@ -155,6 +143,17 @@ struct CachingHostAllocatorImpl {
       if (block) {
         return {block->ptr_, reinterpret_cast<void*>(block)};
       }
+
+      // Launch the background thread and process events in a loop.
+      static bool background_thread_flag [[maybe_unused]] = [this] {
+        getBackgroundThreadPool()->run([&]() {
+          while (true) {
+            process_events();
+            std::this_thread::sleep_for(std::chrono::microseconds(100));
+          }
+        });
+        return true;
+      }();
     }
 
     // Slow path: if we can't allocate from the cached free list, we need
